@@ -3,7 +3,8 @@ var path = require('path')
 var util = require('util')
 var encoding = require('dat-encoding')
 var hyperdrive = require('hyperdrive')
-var createSwarm = require('hyperdrive-archive-swarm')
+var Swarm = require('discovery-swarm')
+var swarmDefaults = require('datland-swarm-defaults')
 var raf = require('random-access-file')
 var each = require('stream-each')
 var thunky = require('thunky')
@@ -263,17 +264,15 @@ Dat.prototype.download = function (cb) {
 Dat.prototype._joinSwarm = function () {
   var self = this
   if (!self.options.discovery) return
-  var discovery = self.options.discovery || {}
-  if (typeof self.options.discovery !== 'object') discovery = {upload: true, download: true}
 
-  self.swarm = createSwarm(self.archive, {
-    port: self.options.port,
-    utp: self.options.utp,
-    upload: discovery.upload,
-    download: discovery.download,
-    signalhub: self.options.signalhub,
-    wrtc: self.options.webrtc
+  var config = swarmDefaults({
+    id: self.archive.id,
+    stream: function () {
+      return self.archive.replicate()
+    }
   })
+  self.swarm = Swarm(config)
+
   self.emit('connecting')
   self.swarm.on('connection', function (peer) {
     self.emit('swarm-update')
@@ -281,6 +280,12 @@ Dat.prototype._joinSwarm = function () {
       self.emit('swarm-update')
     })
   })
+
+  self.swarm.once('error', function () {
+    self.swarm.listen(0)
+  })
+  self.swarm.join(self.archive.discoveryKey)
+  self.swarm.listen(self.options.port || 3282)
 }
 
 Dat.prototype.close = function (cb) {
