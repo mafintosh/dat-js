@@ -3,14 +3,13 @@ var path = require('path')
 var util = require('util')
 var encoding = require('dat-encoding')
 var hyperdrive = require('hyperdrive')
-var Swarm = require('discovery-swarm')
-var swarmDefaults = require('datland-swarm-defaults')
 var raf = require('random-access-file')
 var each = require('stream-each')
 var thunky = require('thunky')
 var extend = require('xtend')
 var importFiles = require('./lib/count-import')
 var getDb = require('./lib/db')
+var createSwarm = require('./lib/swarm')
 
 module.exports = Dat
 
@@ -25,14 +24,12 @@ function Dat (opts) {
     ignore: [/\/\.dat\/.*/, /\/\.dat\/?.*$/, /^\.dat\/?.*$/],
     snapshot: false,
     watchFiles: true,
-    discovery: true,
-    utp: true,
-    webrtc: undefined // false would turn off wrtc even if supported
+    discovery: {upload: true, download: true},
+    utp: true
   }
   if (opts.ignoreHidden !== false) defaultOpts.ignore.push(/[\/\\]\./)
   if (opts.ignore && Array.isArray(opts.ignore)) opts.ignore = opts.ignore.concat(defaultOpts.ignore)
   else if (opts.ignore) opts.ignore = [opts.ignore].concat(defaultOpts.ignore)
-  if (typeof opts.upload !== 'undefined' && typeof opts.discovery === 'undefined') opts.discovery = {upload: opts.upload, download: true} // 3.2.0 backwards compat
   opts = extend(defaultOpts, opts) // opts takes priority
 
   var self = this
@@ -263,15 +260,9 @@ Dat.prototype.download = function (cb) {
 
 Dat.prototype._joinSwarm = function () {
   var self = this
-  if (!self.options.discovery) return
+  if (self.options.discovery === false) return
 
-  var config = swarmDefaults({
-    id: self.archive.id,
-    stream: function () {
-      return self.archive.replicate()
-    }
-  })
-  self.swarm = Swarm(config)
+  self.swarm = createSwarm(self.archive, self.options)
 
   self.emit('connecting')
   self.swarm.on('connection', function (peer) {
@@ -280,12 +271,6 @@ Dat.prototype._joinSwarm = function () {
       self.emit('swarm-update')
     })
   })
-
-  self.swarm.once('error', function () {
-    self.swarm.listen(0)
-  })
-  self.swarm.join(self.archive.discoveryKey)
-  self.swarm.listen(self.options.port || 3282)
 }
 
 Dat.prototype.close = function (cb) {
