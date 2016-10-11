@@ -25,7 +25,6 @@ test('prep', function (t) {
 
 test('Share with default opts', function (t) {
   dat = Dat({dir: fixtures})
-  var fileCount = 0
 
   dat.open(function () {
     t.pass('open okay')
@@ -61,15 +60,8 @@ test('Share with default opts', function (t) {
     t.same(stats.bytesTotal, dat.stats.bytesTotal, 'total bytes')
   })
 
-  dat.on('file-added', function () {
-    fileCount++
-  })
-
   dat.once('archive-finalized', function () {
     t.pass('emits archive-finalized')
-    t.same(stats.filesTotal, fileCount, 'file-added emitted correct # times')
-    t.same(dat.stats.filesProgress, stats.filesTotal, 'progress file count')
-    t.same(dat.stats.bytesProgress, stats.bytesTotal, 'progress byte count')
   })
 })
 

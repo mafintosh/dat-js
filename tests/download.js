@@ -50,8 +50,8 @@ test('Download with default opts', function (t) {
   })
 
   dat.once('download-finished', function () {
-    t.same(dat.stats.filesTotal, stats.filesTotal, 'files total match')
-    t.same(dat.stats.bytesTotal, stats.bytesTotal, 'bytes total match')
+    t.same(dat.stats().filesTotal, stats.filesTotal, 'files total match')
+    t.same(dat.stats().bytesTotal, stats.bytesTotal, 'bytes total match')
     t.pass('download finished event')
 
     fs.readdir(downloadDir, function (_, files) {

@@ -8,8 +8,9 @@ var raf = require('random-access-file')
 var each = require('stream-each')
 var thunky = require('thunky')
 var extend = require('xtend')
-var importFiles = require('./lib/count-import')
 var getDb = require('./lib/db')
+var hyperImport = require('hyperdrive-import-files')
+var HyperStats = require('hyperdrive-stats')
 
 module.exports = Dat
 
@@ -43,15 +44,8 @@ function Dat (opts) {
   else self._datPath = opts._datPath
   self.live = opts.key ? null : !opts.snapshot
   if (opts.snapshot) self.options.watchFiles = false // Can't watch snapshot files
-
-  self.stats = {
-    filesTotal: 0,
-    filesProgress: 0,
-    bytesTotal: 0,
-    bytesProgress: 0,
-    bytesUp: 0,
-    bytesDown: 0
-  }
+  this.archive = null
+  this._stats = null
 
   self.open = thunky(open)
 
@@ -66,6 +60,11 @@ function Dat (opts) {
 
 util.inherits(Dat, events.EventEmitter)
 
+Dat.prototype.stats = function () {
+  if (!this._stats) return {}
+  return this._stats.get()
+}
+
 Dat.prototype._open = function (cb) {
   if (this._closed) return cb('Cannot open a closed Dat')
   var self = this
@@ -77,6 +76,10 @@ Dat.prototype._open = function (cb) {
       file: function (name) {
         return raf(path.join(self.dir, name))
       }
+    })
+    self._stats = HyperStats({
+      archive: self.archive,
+      db: self.db
     })
     self._opened = true
     cb()
@@ -110,51 +113,19 @@ Dat.prototype.share = function (cb) {
       self.emit('key', archive.key.toString('hex'))
     }
 
-    var importer = self._fileStatus = importFiles(self.archive, self.dir, {
+    var importer = self._fileStatus = hyperImport(self.archive, self.dir, {
       live: self.options.watchFiles && archive.live,
       resume: self.resume,
       ignore: self.options.ignore
     }, function (err) {
       if (err) return cb(err)
-      if (!archive.live || !self.options.watchFiles) return done()
-      importer.on('file imported', function (file) {
-        if (file.mode === 'created') self.stats.filesTotal++
-        self.stats.bytesTotal = archive.content.bytes
-        self.emit('archive-updated')
-      })
       done()
     })
 
-    importer.on('error', function (err) {
-      return cb(err)
-    })
-
-    importer.on('file-counted', function (stats) {
-      self.emit('file-counted', stats)
-    })
-
-    importer.on('files-counted', function (stats) {
-      self.stats.filesTotal = stats.filesTotal
-      self.stats.bytesTotal = stats.bytesTotal
-      self.emit('files-counted', stats)
-    })
-
-    importer.on('file imported', function (file) {
-      self.stats.filesProgress = importer.fileCount
-      self.stats.bytesProgress = importer.totalSize
-      self.emit('file-added', file)
-    })
-
-    importer.on('file skipped', function (file) {
-      self.stats.filesProgress = importer.fileCount
-      self.stats.bytesProgress = importer.totalSize
-      file.mode = 'skipped'
-      self.emit('file-added', file)
-    })
+    importer.on('error', cb)
   })
 
   archive.on('upload', function (data) {
-    self.stats.bytesUp += data.length
     self.emit('upload', data)
   })
 
@@ -200,25 +171,14 @@ Dat.prototype.download = function (cb) {
     self.live = archive.live
     self.db.put('!dat!key', archive.key.toString('hex'))
 
-    archive.metadata.once('download-finished', updateTotalStats)
-
     archive.content.on('download-finished', function () {
-      if (self.stats.bytesTotal === 0) updateTotalStats() // TODO: why is this getting here with 0
       self.emit('download-finished')
     })
 
     each(archive.list({live: archive.live}), function (data, next) {
-      var startBytes = self.stats.bytesProgress
       archive.download(data, function (err) {
         if (err) return cb(err)
-        if (startBytes === self.stats.bytesProgress) {
-          // TODO: better way to measure progress with existing files
-          self.stats.bytesProgress += data.length
-        }
-        if (data.type === 'file') {
-          self.stats.filesProgress++
-          self.emit('file-downloaded', data)
-        }
+        if (data.type === 'file') self.emit('file-downloaded', data)
         next()
       })
     }, function (err) {
@@ -228,36 +188,16 @@ Dat.prototype.download = function (cb) {
   })
 
   archive.metadata.on('update', function () {
-    updateTotalStats()
     self.emit('archive-updated')
   })
 
-  archive.once('download', function () {
-    // TODO: fix https://github.com/maxogden/dat/issues/502
-    if (self.stats.bytesTotal === 0) updateTotalStats()
-  })
-
   archive.on('download', function (data) {
-    self.stats.bytesProgress += data.length
-    self.stats.bytesDown += data.length
     self.emit('download', data)
   })
 
   archive.on('upload', function (data) {
-    self.stats.bytesUp += data.length
     self.emit('upload', data)
   })
-
-  function updateTotalStats () {
-    self.stats.bytesTotal = archive.content ? archive.content.bytes : 0
-    var fileCount = 0
-    each(archive.list({live: false}), function (data, next) {
-      if (data.type === 'file') fileCount++
-      next()
-    }, function () {
-      self.stats.filesTotal = fileCount
-    })
-  }
 }
 
 Dat.prototype._joinSwarm = function () {
@@ -289,16 +229,10 @@ Dat.prototype.close = function (cb) {
   self._closed = true
 
   closeSwarm(function () {
-    closeFileWatcher()
     self.archive.close(function () {
       cb()
     })
   })
-
-  function closeFileWatcher () {
-    // TODO: add CB
-    if (self._fileStatus) self._fileStatus.close()
-  }
 
   function closeSwarm (cb) {
     if (!self.swarm) return cb()
